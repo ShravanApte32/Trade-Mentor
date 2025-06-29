@@ -1,0 +1,1 @@
+ E:\\flutter\\projects\\trading_app\\.dart_tool\\flutter_build\\9c9a1d4d9991d02173f01814d5455f9a\\native_assets.yaml: 
