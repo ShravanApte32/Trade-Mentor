@@ -6,6 +6,7 @@ import '../services/api_service.dart';
 import 'dart:convert';
 import 'dart:collection'; // 👈 Add this line
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 class HomeScreen extends StatefulWidget {
   @override
@@ -71,6 +72,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<CandleData> chartCandles = [];
   Map<int, List<String>> patternMarkers = {}; // timestamp -> pattern name
   String selectedFilter = 'All'; // Add near the top in _HomeScreenState
+  Set<String> favoriteSymbols = {};
 
   bool isLoading = false;
 
@@ -78,6 +80,67 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     loadSymbols();
+  }
+
+  void showWatchlistModal(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              "⭐ Watchlist",
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            favoriteSymbols.isEmpty
+                ? Text("No favorite symbols yet.")
+                : SizedBox(
+                    height: 300,
+                    child: ListView.builder(
+                      itemCount: favoriteSymbols.length,
+                      itemBuilder: (context, index) {
+                        final symbol = favoriteSymbols.elementAt(index);
+                        return ListTile(
+                          title: Text(symbol),
+                          trailing: Icon(Icons.show_chart),
+                          onTap: () {
+                            setState(() {
+                              selectedSymbol = symbol;
+                            });
+                            Navigator.pop(context);
+                            loadCandles();
+                          },
+                        );
+                      },
+                    ),
+                  ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> loadFavorites() async {
+    final prefs = await SharedPreferences.getInstance();
+    final favList = prefs.getStringList('favoriteSymbols') ?? [];
+    setState(() => favoriteSymbols = favList.toSet());
+  }
+
+  Future<void> toggleFavorite(String symbol) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (favoriteSymbols.contains(symbol)) {
+      favoriteSymbols.remove(symbol);
+    } else {
+      favoriteSymbols.add(symbol);
+    }
+    await prefs.setStringList('favoriteSymbols', favoriteSymbols.toList());
+    setState(() {}); // Refresh UI
   }
 
   Map<double, int> extractSupportResistanceWithStrength(
@@ -154,127 +217,144 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text("📐 Support & Resistance Zones",
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              Text(
+                "📐 Support & Resistance Zones",
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.indigo,
+                ),
+              ),
               const SizedBox(height: 12),
               SizedBox(
                 height: 300,
-                child: LineChart(
-                  LineChartData(
-                    lineBarsData: [
-                      // Price Line
-                      LineChartBarData(
-                        spots: chartCandles
-                            .map((c) =>
-                                FlSpot(c.timestamp.toDouble(), c.close ?? 0.0))
-                            .toList(),
-                        isCurved: false,
-                        color: Colors.black,
-                        barWidth: 1.5,
-                        dotData: FlDotData(show: false),
-                      ),
-                      // Support Lines
-                      ...supports.map((e) => LineChartBarData(
-                            spots: [
-                              FlSpot(chartCandles.first.timestamp.toDouble(),
-                                  e.key),
-                              FlSpot(chartCandles.last.timestamp.toDouble(),
-                                  e.key),
-                            ],
-                            isCurved: false,
-                            color: Colors.blue.withOpacity(0.6),
-                            barWidth: 1.5,
-                            dashArray: [6, 3],
-                            dotData: FlDotData(show: false),
-                          )),
-                      // Resistance Lines
-                      ...resistances.map((e) => LineChartBarData(
-                            spots: [
-                              FlSpot(chartCandles.first.timestamp.toDouble(),
-                                  e.key),
-                              FlSpot(chartCandles.last.timestamp.toDouble(),
-                                  e.key),
-                            ],
-                            isCurved: false,
-                            color: Colors.red.withOpacity(0.8),
-                            barWidth: 2.0,
-                            dashArray: [6, 3],
-                            dotData: FlDotData(show: false),
-                          )),
-                    ],
-                    titlesData: FlTitlesData(show: false),
-                    gridData: FlGridData(show: true),
-                    borderData: FlBorderData(show: true),
-                    extraLinesData: ExtraLinesData(
-                      horizontalLines: [
-                        if (supports.isNotEmpty)
-                          HorizontalLine(
-                            y: supports.first.key,
-                            label: HorizontalLineLabel(
-                              show: true,
-                              alignment: Alignment.centerLeft,
-                              style: TextStyle(
-                                  color: Colors.green,
-                                  fontWeight: FontWeight.bold),
-                              labelResolver: (_) => '🟢 Buy Zone',
-                            ),
-                            color: Colors.transparent,
-                          ),
-                        if (resistances.isNotEmpty)
-                          HorizontalLine(
-                            y: resistances.first.key,
-                            label: HorizontalLineLabel(
-                              show: true,
-                              alignment: Alignment.centerLeft,
-                              style: TextStyle(
-                                  color: Colors.red,
-                                  fontWeight: FontWeight.bold),
-                              labelResolver: (_) => '🔴 Sell Zone',
-                            ),
-                            color: Colors.transparent,
-                          ),
-                      ],
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [Colors.indigo[50]!, Colors.white],
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
                     ),
-                    lineTouchData: LineTouchData(
-                      handleBuiltInTouches: true,
-                      touchTooltipData: LineTouchTooltipData(
-                        tooltipBgColor: Colors.black87,
-                        getTooltipItems: (touchedSpots) {
-                          return touchedSpots.map((spot) {
-                            ZonePoint? matchedZone;
-                            for (var z in zonePoints) {
-                              if ((z.level - spot.y).abs() / z.level < 0.005) {
-                                matchedZone = z;
-                                break;
+                  ),
+                  child: LineChart(
+                    LineChartData(
+                      lineBarsData: [
+                        // Price Line
+                        LineChartBarData(
+                          spots: chartCandles
+                              .map((c) => FlSpot(
+                                  c.timestamp.toDouble(), c.close ?? 0.0))
+                              .toList(),
+                          isCurved: false,
+                          color: Colors.black,
+                          barWidth: 1.5,
+                          dotData: FlDotData(show: false),
+                        ),
+                        // Support Lines
+                        ...supports.map((e) => LineChartBarData(
+                              spots: [
+                                FlSpot(chartCandles.first.timestamp.toDouble(),
+                                    e.key),
+                                FlSpot(chartCandles.last.timestamp.toDouble(),
+                                    e.key),
+                              ],
+                              isCurved: false,
+                              color: Colors.blue.withOpacity(0.6),
+                              barWidth: 1.5,
+                              dashArray: [6, 3],
+                              dotData: FlDotData(show: false),
+                            )),
+                        // Resistance Lines
+                        ...resistances.map((e) => LineChartBarData(
+                              spots: [
+                                FlSpot(chartCandles.first.timestamp.toDouble(),
+                                    e.key),
+                                FlSpot(chartCandles.last.timestamp.toDouble(),
+                                    e.key),
+                              ],
+                              isCurved: false,
+                              color: Colors.red.withOpacity(0.8),
+                              barWidth: 2.0,
+                              dashArray: [6, 3],
+                              dotData: FlDotData(show: false),
+                            )),
+                      ],
+                      titlesData: FlTitlesData(show: false),
+                      gridData: FlGridData(show: true),
+                      borderData: FlBorderData(show: true),
+                      extraLinesData: ExtraLinesData(
+                        horizontalLines: [
+                          if (supports.isNotEmpty)
+                            HorizontalLine(
+                              y: supports.first.key,
+                              label: HorizontalLineLabel(
+                                show: true,
+                                alignment: Alignment.centerLeft,
+                                style: TextStyle(
+                                    color: Colors.green,
+                                    fontWeight: FontWeight.bold),
+                                labelResolver: (_) => '🟢 Buy Zone',
+                              ),
+                              color: Colors.transparent,
+                            ),
+                          if (resistances.isNotEmpty)
+                            HorizontalLine(
+                              y: resistances.first.key,
+                              label: HorizontalLineLabel(
+                                show: true,
+                                alignment: Alignment.centerLeft,
+                                style: TextStyle(
+                                    color: Colors.red,
+                                    fontWeight: FontWeight.bold),
+                                labelResolver: (_) => '🔴 Sell Zone',
+                              ),
+                              color: Colors.transparent,
+                            ),
+                        ],
+                      ),
+                      lineTouchData: LineTouchData(
+                        handleBuiltInTouches: true,
+                        touchTooltipData: LineTouchTooltipData(
+                          tooltipBgColor: Colors.black87,
+                          getTooltipItems: (touchedSpots) {
+                            return touchedSpots.map((spot) {
+                              ZonePoint? matchedZone;
+                              for (var z in zonePoints) {
+                                if ((z.level - spot.y).abs() / z.level <
+                                    0.005) {
+                                  matchedZone = z;
+                                  break;
+                                }
                               }
-                            }
 
-                            if (matchedZone != null) {
-                              final strength = matchedZone.touches >= 4
-                                  ? '💪 Strong'
-                                  : '⚠️ Weak';
-                              final zoneText = matchedZone.isSupport
-                                  ? '🟢 Buy Zone'
-                                  : '🔴 Sell Zone';
-                              final color = matchedZone.isSupport
-                                  ? Colors.green
-                                  : Colors.red;
+                              if (matchedZone != null) {
+                                final strength = matchedZone.touches >= 4
+                                    ? '💪 Strong'
+                                    : '⚠️ Weak';
+                                final zoneText = matchedZone.isSupport
+                                    ? '🟢 Buy Zone'
+                                    : '🔴 Sell Zone';
+                                final color = matchedZone.isSupport
+                                    ? Colors.green
+                                    : Colors.red;
 
-                              return LineTooltipItem(
-                                '$zoneText\nTouches: ${matchedZone.touches}\n$strength',
-                                TextStyle(
-                                    color: color, fontWeight: FontWeight.bold),
-                              );
-                            } else {
-                              return LineTooltipItem(
-                                '📍 No nearby level',
-                                TextStyle(
-                                    color: Colors.grey,
-                                    fontWeight: FontWeight.normal),
-                              );
-                            }
-                          }).toList();
-                        },
+                                return LineTooltipItem(
+                                  '$zoneText\nTouches: ${matchedZone.touches}\n$strength',
+                                  TextStyle(
+                                      color: color,
+                                      fontWeight: FontWeight.bold),
+                                );
+                              } else {
+                                return LineTooltipItem(
+                                  '📍 No nearby level',
+                                  TextStyle(
+                                      color: Colors.grey,
+                                      fontWeight: FontWeight.normal),
+                                );
+                              }
+                            }).toList();
+                          },
+                        ),
                       ),
                     ),
                   ),
@@ -588,12 +668,21 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Trade Mentor'),
+        title: Center(child: Text('        📊 Trade Mentor')),
+        backgroundColor: Colors.indigo[800],
+        foregroundColor: Colors.white,
+        elevation: 4,
+        shadowColor: Colors.indigo.withOpacity(0.3),
         actions: [
           IconButton(
-            icon: Icon(Icons.show_chart_rounded),
+            icon: Icon(Icons.auto_graph),
             tooltip: "Support/Resistance",
             onPressed: () => showSupportResistanceChart(context),
+          ),
+          IconButton(
+            icon: Icon(Icons.star),
+            tooltip: "Watchlist",
+            onPressed: () => showWatchlistModal(context),
           ),
         ],
       ),
@@ -605,47 +694,120 @@ class _HomeScreenState extends State<HomeScreen> {
             Row(
               children: [
                 Expanded(
-                  child: DropdownButton<String>(
-                    isExpanded: true,
-                    value: selectedSymbol,
-                    hint: Text("Select Symbol"),
-                    items: symbols
-                        .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-                        .toList(),
-                    onChanged: (val) {
-                      setState(() => selectedSymbol = val);
-                      loadCandles();
-                    },
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Container(
+                          padding: EdgeInsets.symmetric(horizontal: 12),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.indigo),
+                          ),
+                          child: DropdownButtonHideUnderline(
+                            child: DropdownButton<String>(
+                              value: selectedSymbol,
+                              isExpanded: true,
+                              items: symbols.map((s) {
+                                return DropdownMenuItem(
+                                  value: s,
+                                  child: Row(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Text(s, style: TextStyle(fontSize: 14)),
+                                      if (favoriteSymbols.contains(s))
+                                        Icon(Icons.star,
+                                            color: Colors.orange, size: 16),
+                                    ],
+                                  ),
+                                );
+                              }).toList(),
+                              onChanged: (val) {
+                                setState(() => selectedSymbol = val);
+                                loadCandles();
+                              },
+                            ),
+                          ),
+                        ),
+                      ),
+                      SizedBox(width: 8),
+                      IconButton(
+                        icon: Icon(
+                          favoriteSymbols.contains(selectedSymbol)
+                              ? Icons.star
+                              : Icons.star_border,
+                          color: Colors.orange,
+                        ),
+                        onPressed: () => toggleFavorite(selectedSymbol!),
+                      ),
+                    ],
                   ),
                 ),
                 SizedBox(width: 10),
-                DropdownButton<String>(
-                  value: selectedTimeframe,
-                  items: ['1D', '1W', '1M', '5min']
-                      .map((tf) => DropdownMenuItem(value: tf, child: Text(tf)))
-                      .toList(),
-                  onChanged: (val) {
-                    setState(() => selectedTimeframe = val!);
-                    loadCandles();
-                  },
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.indigo),
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: selectedTimeframe,
+                      items: ['1D', '1W', '1M', '5min']
+                          .map((tf) =>
+                              DropdownMenuItem(value: tf, child: Text(tf)))
+                          .toList(),
+                      onChanged: (val) {
+                        setState(() => selectedTimeframe = val!);
+                        loadCandles();
+                      },
+                    ),
+                  ),
                 ),
               ],
             ),
-            Row(
-              children: [
-                Text("🧮 Filter: "),
-                DropdownButton<String>(
-                  value: selectedFilter,
-                  items: getFilterOptions()
-                      .map((type) =>
-                          DropdownMenuItem(value: type, child: Text(type)))
-                      .toList(),
-                  onChanged: (val) {
-                    setState(() => selectedFilter = val!);
-                  },
-                ),
-              ],
+            SizedBox(height: 10),
+            Container(
+              padding: EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.indigo),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.filter_alt, size: 18, color: Colors.indigo),
+                  SizedBox(width: 6),
+                  Text(
+                    "Filter:",
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Colors.black87,
+                    ),
+                  ),
+                  SizedBox(width: 8),
+                  DropdownButton<String>(
+                    value: selectedFilter,
+                    underline: SizedBox(),
+                    style: TextStyle(color: Colors.black87),
+                    dropdownColor: Colors.white,
+                    icon: Icon(Icons.arrow_drop_down, color: Colors.indigo),
+                    borderRadius: BorderRadius.circular(8),
+                    items: getFilterOptions()
+                        .map((type) => DropdownMenuItem(
+                              value: type,
+                              child: Text(type),
+                            ))
+                        .toList(),
+                    onChanged: (val) => setState(() => selectedFilter = val!),
+                  ),
+                ],
+              ),
             ),
+
             SizedBox(height: 8),
 
             // 🟡 Pattern Summary Chips
@@ -793,12 +955,12 @@ class _HomeScreenState extends State<HomeScreen> {
       floatingActionButton: patternMarkers.isNotEmpty
           ? FloatingActionButton.extended(
               onPressed: () => showPatternHistorySheet(context),
-              icon: Icon(Icons.history, color: Colors.white), // 👈 icon color
-              label: Text(
-                "Pattern History",
-                style: TextStyle(color: Colors.white), // 👈 text color
-              ),
-              backgroundColor: Colors.indigo, // 👈 button bg
+              label: Text("Pattern History"),
+              icon: Icon(Icons.history),
+              backgroundColor: Colors.indigo,
+              foregroundColor: Colors.white,
+              shape: StadiumBorder(),
+              elevation: 6,
             )
           : null,
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
