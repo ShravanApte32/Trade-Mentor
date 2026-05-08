@@ -1,294 +1,1006 @@
-import 'package:fl_chart/fl_chart.dart';
-import 'package:flutter/material.dart';
-import 'package:interactive_chart/interactive_chart.dart';
-import 'package:trading_app/models/zone_point.dart';
-import '../services/api_service.dart';
 import 'dart:convert';
-import 'dart:collection'; // 👈 Add this line
+import 'package:flutter/material.dart';
+import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
 import 'package:http/http.dart' as http;
+import 'package:interactive_chart/interactive_chart.dart';
+import 'package:intl/intl.dart';
+import 'package:trading_app/screens/patterns_library_screen.dart';
+import 'package:trading_app/screens/settings_screen.dart';
+import 'package:trading_app/screens/pattern_detail_screen.dart';
+import 'package:trading_app/screens/watchlist_screen.dart';
+import 'package:trading_app/themes/app_theme.dart';
+import '../services/api_service.dart';
+import '../models/candle.dart';
+import '../utils/mock_data.dart';
+
+// Global key to access HomeScreen state from anywhere
+final GlobalKey<_HomeScreenState> homeScreenKey = GlobalKey<_HomeScreenState>();
 
 class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
+
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  List<String> symbols = [
-    'RELIANCE.BSE',
-    'TATAMOTORS.BSE',
-    'INFY.BSE',
-    'HDFCBANK.BSE',
-    'ICICIBANK.BSE',
-    'TCS.BSE',
-    'LT.BSE',
-    'SBIN.BSE',
-    'BHARTIARTL.BSE',
-    'AXISBANK.BSE',
-    'KOTAKBANK.BSE',
-    'BAJFINANCE.BSE',
-    'ASIANPAINT.BSE',
-    'ITC.BSE',
-    'SUNPHARMA.BSE',
-    'MARUTI.BSE',
-    'ULTRACEMCO.BSE',
-    'TECHM.BSE',
-    'NTPC.BSE',
-    'POWERGRID.BSE',
-    'WIPRO.BSE',
-    'ONGC.BSE',
-    'ADANIENT.BSE',
-    'ADANIPORTS.BSE',
-    'BAJAJFINSV.BSE',
-    'TITAN.BSE',
-    'NESTLEIND.BSE',
-    'HCLTECH.BSE',
-    'GRASIM.BSE',
-    'HINDUNILVR.BSE',
-    'COALINDIA.BSE',
-    'JSWSTEEL.BSE',
-    'BPCL.BSE',
-    'EICHERMOT.BSE',
-    'DIVISLAB.BSE',
-    'DRREDDY.BSE',
-    'BRITANNIA.BSE',
-    'CIPLA.BSE',
-    'HEROMOTOCO.BSE',
-    'INDUSINDBK.BSE',
-    'BAJAJ_AUTO.BSE',
-    'SBILIFE.BSE',
-    'ICICIPRULI.BSE',
-    'HDFCLIFE.BSE',
-    'TATACONSUM.BSE',
-    'APOLLOHOSP.BSE',
-    'HINDALCO.BSE',
-    'SHREECEM.BSE',
-    'M&M.BSE',
-    'UPL.BSE'
-  ];
+class _HomeScreenState extends State<HomeScreen>
+    with SingleTickerProviderStateMixin {
+  int _currentIndex = 0;
+  late TabController _tabController;
 
+  // Trading data
+  List<String> symbols = [];
   String? selectedSymbol;
   String selectedTimeframe = '1D';
-  List<CandleData> chartCandles = [];
-  Map<int, List<String>> patternMarkers = {}; // timestamp -> pattern name
-  String selectedFilter = 'All'; // Add near the top in _HomeScreenState
+  List<Candle> candles = [];
+  Map<int, List<String>> patternMarkers = {};
 
+  // UI States
   bool isLoading = false;
+  bool isRefreshing = false;
+
+  // Market metrics
+  double currentPrice = 0;
+  double priceChange = 0;
+  double priceChangePercent = 0;
+
+  // Mock mode for development
+  bool useMockData = true;
 
   @override
   void initState() {
     super.initState();
-    loadSymbols();
+    _tabController = TabController(length: 3, vsync: this);
+    _loadInitialData();
   }
 
-  Map<double, int> extractSupportResistanceWithStrength(
-      List<CandleData> candles) {
-    const double tolerance = 0.02; // 2% tolerance
-    Map<double, int> levelStrength = {};
+  // Public method to change symbol from watchlist
+  void changeSymbol(String symbol) {
+    setState(() {
+      selectedSymbol = symbol;
+      _loadCandles();
+    });
+  }
 
-    for (int i = 1; i < candles.length - 1; i++) {
-      final prev = candles[i - 1];
-      final curr = candles[i];
-      final next = candles[i + 1];
+  // Public method to change tab
+  void changeTab(int index) {
+    setState(() {
+      _currentIndex = index;
+    });
+  }
 
-      // Support
-      if ((curr.low ?? 0) < (prev.low ?? 0) &&
-          (curr.low ?? 0) < (next.low ?? 0)) {
-        final level = curr.low ?? 0;
-        final match = levelStrength.keys.firstWhere(
-          (l) => (l - level).abs() / level < tolerance,
-          orElse: () => -1,
+  Future<void> _loadInitialData() async {
+    setState(() => isLoading = true);
+
+    try {
+      final fetchedSymbols = await ApiService.fetchSymbols();
+
+      if (fetchedSymbols.isNotEmpty) {
+        setState(() {
+          symbols = fetchedSymbols;
+          selectedSymbol = symbols.first;
+        });
+        await _loadCandles();
+      } else {
+        setState(() {
+          symbols = MockDataGenerator.getMockSymbols();
+          selectedSymbol = symbols.first;
+        });
+        await _loadMockCandles();
+      }
+    } catch (e) {
+      print("Error: $e");
+      setState(() {
+        symbols = MockDataGenerator.getMockSymbols();
+        selectedSymbol = symbols.first;
+      });
+      await _loadMockCandles();
+    }
+
+    setState(() => isLoading = false);
+  }
+
+  Future<void> _loadMockCandles() async {
+    await Future.delayed(const Duration(milliseconds: 500));
+    setState(() {
+      candles = MockDataGenerator.generateMockCandles(selectedSymbol!, 50);
+      patternMarkers = MockDataGenerator.generateMockPatterns(candles);
+      _updateMarketMetrics();
+    });
+  }
+
+  Future<void> _loadCandles() async {
+    if (selectedSymbol == null) return;
+
+    setState(() => isLoading = true);
+    print("📡 Loading candles for: $selectedSymbol | $selectedTimeframe");
+
+    try {
+      // Fetch and store real data from Alpha Vantage
+      final result = await ApiService.fetchAndStoreCandles(
+          selectedSymbol!, selectedTimeframe);
+
+      String dataSource = result['source'];
+      print("📊 Data source: $dataSource");
+
+      if (!result['success']) {
+        print("⚠️ Failed to fetch from Alpha Vantage");
+        setState(() => isLoading = false);
+        return;
+      }
+
+      // Show snackbar with data source info
+      if (mounted) {
+        String message = dataSource == 'cache'
+            ? '📦 Loaded from cache (no API call)'
+            : '🌐 Fetched fresh data from Alpha Vantage';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            duration: Duration(seconds: 2),
+            backgroundColor:
+                dataSource == 'cache' ? Colors.orange : Colors.green,
+          ),
         );
-        if (match != -1) {
-          levelStrength[match] = levelStrength[match]! + 1;
-        } else {
-          levelStrength[level] = 1;
+      }
+
+      // Fetch patterns and candles from your database
+      final url = Uri.parse(
+        "${ApiService.baseUrl}/fetch_patterns.php?symbol=$selectedSymbol&timeframe=$selectedTimeframe",
+      );
+
+      final res = await http.get(url);
+      print("📡 Patterns response status: ${res.statusCode}");
+
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body);
+
+        if (data["status"] == "success") {
+          final List candlesJson = data["candles"];
+          final List patternsJson = data["patterns"];
+
+          print("✅ Got ${candlesJson.length} candles from database");
+
+          List<Candle> tempCandles = [];
+          Map<int, List<String>> tempMarkers = {};
+
+          for (var item in candlesJson) {
+            tempCandles.add(Candle(
+              date: item['date'],
+              open: double.parse(item['open'].toString()),
+              high: double.parse(item['high'].toString()),
+              low: double.parse(item['low'].toString()),
+              close: double.parse(item['close'].toString()),
+              volume: int.parse(item['volume'].toString()),
+            ));
+          }
+
+          for (var p in patternsJson) {
+            final timestamp = DateTime.parse(p['date']).millisecondsSinceEpoch;
+            if (!tempMarkers.containsKey(timestamp)) {
+              tempMarkers[timestamp] = [];
+            }
+            tempMarkers[timestamp]!.add(p['pattern']);
+          }
+
+          setState(() {
+            candles = tempCandles;
+            patternMarkers = tempMarkers;
+            _updateMarketMetrics();
+          });
+
+          print("✅ Loaded ${candles.length} candles");
+          setState(() => isLoading = false);
+          return;
         }
       }
 
-      // Resistance
-      if ((curr.high ?? 0) > (prev.high ?? 0) &&
-          (curr.high ?? 0) > (next.high ?? 0)) {
-        final level = curr.high ?? 0;
-        final match = levelStrength.keys.firstWhere(
-          (l) => (l - level).abs() / level < tolerance,
-          orElse: () => -1,
+      print("⚠️ No data found in database");
+      await _loadMockCandles();
+    } catch (e) {
+      print("🔥 Error: $e");
+      await _loadMockCandles();
+    } finally {
+      setState(() => isLoading = false);
+    }
+  }
+
+  void _updateMarketMetrics() {
+    if (candles.isNotEmpty) {
+      currentPrice = candles.last.close;
+      if (candles.length > 1) {
+        priceChange = candles.last.close - candles[candles.length - 2].close;
+        priceChangePercent =
+            (priceChange / candles[candles.length - 2].close) * 100;
+      }
+    }
+  }
+
+  String getTrendLabel() {
+    if (candles.length < 6) return 'Neutral';
+
+    double avg(List<double> values) =>
+        values.reduce((a, b) => a + b) / values.length;
+
+    final last3 =
+        candles.sublist(candles.length - 3).map((e) => e.close).toList();
+    final prev3 = candles
+        .sublist(candles.length - 6, candles.length - 3)
+        .map((e) => e.close)
+        .toList();
+
+    final lastAvg = avg(last3);
+    final prevAvg = avg(prev3);
+
+    if (lastAvg > prevAvg * 1.01) return 'Bullish';
+    if (lastAvg < prevAvg * 0.99) return 'Bearish';
+    return 'Sideways';
+  }
+
+  Color getTrendColor() {
+    String trend = getTrendLabel();
+    if (trend == 'Bullish') return AppTheme.accentGreen;
+    if (trend == 'Bearish') return AppTheme.accentRed;
+    return AppTheme.accentYellow;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      key: homeScreenKey,
+      appBar: _buildAppBar(),
+      body: isLoading
+          ? _buildLoadingShimmer()
+          : IndexedStack(
+              index: _currentIndex,
+              children: [
+                _buildMainContent(),
+                const PatternsLibraryScreen(),
+                WatchlistScreen(onSymbolSelected: (symbol) {
+                  changeSymbol(symbol);
+                  changeTab(0);
+                }),
+                const SettingsScreen(),
+              ],
+            ),
+      bottomNavigationBar: _buildBottomNavigation(),
+      floatingActionButton:
+          _currentIndex == 0 && patternMarkers.isNotEmpty ? _buildFAB() : null,
+      floatingActionButtonLocation: FloatingActionButtonLocation.endDocked,
+    );
+  }
+
+  PreferredSizeWidget _buildAppBar() {
+    return AppBar(
+      title: Column(
+        children: [
+          Text(
+            selectedSymbol?.replaceAll('.BSE', '') ?? 'Select Stock',
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          if (currentPrice > 0)
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '₹${NumberFormat('#,##0.00').format(currentPrice)}',
+                  style: const TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.normal),
+                ),
+                const SizedBox(width: 4),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: priceChange >= 0
+                        ? AppTheme.accentGreen
+                        : AppTheme.accentRed,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    '${priceChange >= 0 ? "+" : ""}${priceChangePercent.toStringAsFixed(2)}%',
+                    style: const TextStyle(
+                        fontSize: 10, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+        ],
+      ),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.search),
+          onPressed: () => _showSymbolSearch(),
+        ),
+        IconButton(
+          icon: const Icon(Icons.refresh),
+          onPressed: () => _refreshData(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMainContent() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 80),
+            child: Column(
+              children: [
+                _buildTimeframeSelector(),
+                _buildTrendIndicator(),
+                // Add pattern indicator right after trend indicator
+                if (patternMarkers.isNotEmpty) _buildPatternIndicator(),
+                SizedBox(
+                  height: MediaQuery.of(context).size.height * 0.5,
+                  child: _buildChart(),
+                ),
+                if (patternMarkers.isNotEmpty) _buildPatternsSection(),
+                const SizedBox(height: 20),
+              ],
+            ),
+          ),
         );
-        if (match != -1) {
-          levelStrength[match] = levelStrength[match]! + 1;
-        } else {
-          levelStrength[level] = 1;
+      },
+    );
+  }
+
+  Widget _buildPatternIndicator() {
+    if (patternMarkers.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      height: 40,
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: ListView.builder(
+        key: _patternIndicatorKey, // Add this key
+        scrollDirection: Axis.horizontal,
+        itemCount: patternMarkers.length,
+        itemBuilder: (context, index) {
+          final timestamp = patternMarkers.keys.toList()[index];
+          final patterns = patternMarkers[timestamp]!;
+          final date = DateTime.fromMillisecondsSinceEpoch(timestamp);
+
+          // Determine pattern type
+          bool isBullish = patterns.any((p) =>
+              p.toLowerCase().contains('bull') ||
+              p.toLowerCase().contains('up'));
+          bool isBearish = patterns.any((p) =>
+              p.toLowerCase().contains('bear') ||
+              p.toLowerCase().contains('down'));
+
+          Color indicatorColor = isBullish
+              ? AppTheme.accentGreen
+              : isBearish
+                  ? AppTheme.accentRed
+                  : AppTheme.accentYellow;
+
+          // Check if this date is selected for highlighting
+          bool isSelected = _selectedDateForHighlight != null &&
+              date.year == _selectedDateForHighlight!.year &&
+              date.month == _selectedDateForHighlight!.month &&
+              date.day == _selectedDateForHighlight!.day;
+
+          return AnimatedContainer(
+            duration: const Duration(milliseconds: 300),
+            margin: const EdgeInsets.only(right: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: isSelected
+                  ? indicatorColor.withOpacity(0.4)
+                  : indicatorColor.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: indicatorColor,
+                width: isSelected ? 2 : 1,
+              ),
+              boxShadow: isSelected
+                  ? [
+                      BoxShadow(
+                        color: indicatorColor.withOpacity(0.5),
+                        blurRadius: 8,
+                        spreadRadius: 1,
+                      ),
+                    ]
+                  : null,
+            ),
+            child: GestureDetector(
+              onTap: () {
+                _showPatternAtDate(date, patterns);
+              },
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: indicatorColor,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    DateFormat('MMM dd').format(date),
+                    style: TextStyle(
+                      color: indicatorColor,
+                      fontSize: 11,
+                      fontWeight:
+                          isSelected ? FontWeight.bold : FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    '(${patterns.length})',
+                    style: TextStyle(
+                      color: indicatorColor,
+                      fontSize: 10,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  void _showPatternAtDate(DateTime date, List<String> patterns) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppTheme.textSecondary,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  '📊 Patterns on ${DateFormat('MMM dd, yyyy').format(date)}',
+                  style: const TextStyle(
+                      fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                // Add "Go to Chart" button
+                TextButton.icon(
+                  onPressed: () {
+                    Navigator.pop(context); // Close bottom sheet
+                    _scrollToDate(date); // Scroll to the date
+                  },
+                  icon: const Icon(Icons.timeline, size: 16),
+                  label: const Text('Go to Chart'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppTheme.primaryColor,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            ...patterns.map((pattern) => ListTile(
+                  leading: Icon(
+                    pattern.toLowerCase().contains('bull')
+                        ? Icons.trending_up
+                        : pattern.toLowerCase().contains('bear')
+                            ? Icons.trending_down
+                            : Icons.remove,
+                    color: pattern.toLowerCase().contains('bull')
+                        ? AppTheme.accentGreen
+                        : pattern.toLowerCase().contains('bear')
+                            ? AppTheme.accentRed
+                            : AppTheme.accentYellow,
+                  ),
+                  title: Text(pattern),
+                  trailing: const Icon(Icons.chevron_right, size: 20),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _showPatternDetails(pattern);
+                  },
+                )),
+            const SizedBox(height: 10),
+          ],
+        ),
+      ),
+    );
+  }
+
+// Add this method to scroll to a specific date
+  void _scrollToDate(DateTime targetDate) {
+    if (candles.isEmpty) return;
+
+    // Find the index of the candle
+    int targetIndex = -1;
+    for (int i = 0; i < candles.length; i++) {
+      final candleDate = DateTime.parse(candles[i].date);
+      if (candleDate.year == targetDate.year &&
+          candleDate.month == targetDate.month &&
+          candleDate.day == targetDate.day) {
+        targetIndex = i;
+        break;
+      }
+    }
+
+    if (targetIndex != -1) {
+      // Show a snackbar
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+              '📍 Showing patterns for ${DateFormat('MMM dd, yyyy').format(targetDate)}'),
+          duration: const Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+
+      // Highlight the pattern chip
+      setState(() {
+        _selectedDateForHighlight = targetDate;
+      });
+
+      // Scroll to the pattern in the list
+      _scrollToPatternInList(targetDate);
+
+      // Auto-deselect after 3 seconds
+      Future.delayed(const Duration(seconds: 3), () {
+        if (mounted) {
+          setState(() {
+            _selectedDateForHighlight = null;
+          });
+        }
+      });
+    }
+  }
+
+// Add a GlobalKey for the pattern indicator ListView
+  final GlobalKey _patternIndicatorKey = GlobalKey();
+
+// Add this variable to track selected date for highlighting
+  DateTime? _selectedDateForHighlight;
+
+// Add this method to scroll to the pattern in the horizontal list
+  void _scrollToPatternInList(DateTime targetDate) {
+    // Find the scrollable pattern indicator and scroll to it
+    final patternKeys = patternMarkers.keys.toList();
+    int targetIndex = -1;
+
+    for (int i = 0; i < patternKeys.length; i++) {
+      final date = DateTime.fromMillisecondsSinceEpoch(patternKeys[i]);
+      if (date.year == targetDate.year &&
+          date.month == targetDate.month &&
+          date.day == targetDate.day) {
+        targetIndex = i;
+        break;
+      }
+    }
+
+    if (targetIndex != -1 && _patternIndicatorKey.currentContext != null) {
+      // Scroll to the pattern in the horizontal list
+      final RenderBox? renderBox =
+          _patternIndicatorKey.currentContext?.findRenderObject() as RenderBox?;
+      if (renderBox != null) {
+        // The scrolling will be handled by the Scrollable widget
+        // We need to get the Scrollable state
+        final ScrollableState? scrollableState = _patternIndicatorKey
+            .currentContext
+            ?.findAncestorStateOfType<ScrollableState>();
+        if (scrollableState != null) {
+          // Calculate scroll offset (each item is about 100-120 pixels wide)
+          final double itemWidth =
+              100; // Approximate width of each pattern chip
+          final double scrollOffset = targetIndex * itemWidth;
+
+          scrollableState.position.animateTo(
+            scrollOffset,
+            duration: const Duration(milliseconds: 500),
+            curve: Curves.easeInOut,
+          );
         }
       }
     }
 
-    return levelStrength;
+    // Auto-deselect highlight after 3 seconds
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) {
+        setState(() {
+          _selectedDateForHighlight = null;
+        });
+      }
+    });
   }
 
-  void showSupportResistanceChart(BuildContext context) {
-    final levelMap = extractSupportResistanceWithStrength(chartCandles);
-
-    final minPrice =
-        chartCandles.map((c) => c.low ?? 0).reduce((a, b) => a < b ? a : b);
-    final maxPrice =
-        chartCandles.map((c) => c.high ?? 0).reduce((a, b) => a > b ? a : b);
-    final midPrice = (minPrice + maxPrice) / 2;
-
-    final supports = levelMap.entries.where((e) => e.key <= midPrice).toList();
-    final resistances =
-        levelMap.entries.where((e) => e.key > midPrice).toList();
-
-    // Wrap support/resistance in tooltip zones
-    final List<ZonePoint> zonePoints = [
-      ...supports.map((e) => ZonePoint(e.key, true, e.value)),
-      ...resistances.map((e) => ZonePoint(e.key, false, e.value)),
-    ];
-
-    showModalBottomSheet(
-      context: context,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (context) {
-        return Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text("📐 Support & Resistance Zones",
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 12),
-              SizedBox(
-                height: 300,
-                child: LineChart(
-                  LineChartData(
-                    lineBarsData: [
-                      // Price Line
-                      LineChartBarData(
-                        spots: chartCandles
-                            .map((c) =>
-                                FlSpot(c.timestamp.toDouble(), c.close ?? 0.0))
-                            .toList(),
-                        isCurved: false,
-                        color: Colors.black,
-                        barWidth: 1.5,
-                        dotData: FlDotData(show: false),
-                      ),
-                      // Support Lines
-                      ...supports.map((e) => LineChartBarData(
-                            spots: [
-                              FlSpot(chartCandles.first.timestamp.toDouble(),
-                                  e.key),
-                              FlSpot(chartCandles.last.timestamp.toDouble(),
-                                  e.key),
-                            ],
-                            isCurved: false,
-                            color: Colors.blue.withOpacity(0.6),
-                            barWidth: 1.5,
-                            dashArray: [6, 3],
-                            dotData: FlDotData(show: false),
-                          )),
-                      // Resistance Lines
-                      ...resistances.map((e) => LineChartBarData(
-                            spots: [
-                              FlSpot(chartCandles.first.timestamp.toDouble(),
-                                  e.key),
-                              FlSpot(chartCandles.last.timestamp.toDouble(),
-                                  e.key),
-                            ],
-                            isCurved: false,
-                            color: Colors.red.withOpacity(0.8),
-                            barWidth: 2.0,
-                            dashArray: [6, 3],
-                            dotData: FlDotData(show: false),
-                          )),
-                    ],
-                    titlesData: FlTitlesData(show: false),
-                    gridData: FlGridData(show: true),
-                    borderData: FlBorderData(show: true),
-                    extraLinesData: ExtraLinesData(
-                      horizontalLines: [
-                        if (supports.isNotEmpty)
-                          HorizontalLine(
-                            y: supports.first.key,
-                            label: HorizontalLineLabel(
-                              show: true,
-                              alignment: Alignment.centerLeft,
-                              style: TextStyle(
-                                  color: Colors.green,
-                                  fontWeight: FontWeight.bold),
-                              labelResolver: (_) => '🟢 Buy Zone',
-                            ),
-                            color: Colors.transparent,
-                          ),
-                        if (resistances.isNotEmpty)
-                          HorizontalLine(
-                            y: resistances.first.key,
-                            label: HorizontalLineLabel(
-                              show: true,
-                              alignment: Alignment.centerLeft,
-                              style: TextStyle(
-                                  color: Colors.red,
-                                  fontWeight: FontWeight.bold),
-                              labelResolver: (_) => '🔴 Sell Zone',
-                            ),
-                            color: Colors.transparent,
-                          ),
-                      ],
-                    ),
-                    lineTouchData: LineTouchData(
-                      handleBuiltInTouches: true,
-                      touchTooltipData: LineTouchTooltipData(
-                        tooltipBgColor: Colors.black87,
-                        getTooltipItems: (touchedSpots) {
-                          return touchedSpots.map((spot) {
-                            ZonePoint? matchedZone;
-                            for (var z in zonePoints) {
-                              if ((z.level - spot.y).abs() / z.level < 0.005) {
-                                matchedZone = z;
-                                break;
-                              }
-                            }
-
-                            if (matchedZone != null) {
-                              final strength = matchedZone.touches >= 4
-                                  ? '💪 Strong'
-                                  : '⚠️ Weak';
-                              final zoneText = matchedZone.isSupport
-                                  ? '🟢 Buy Zone'
-                                  : '🔴 Sell Zone';
-                              final color = matchedZone.isSupport
-                                  ? Colors.green
-                                  : Colors.red;
-
-                              return LineTooltipItem(
-                                '$zoneText\nTouches: ${matchedZone.touches}\n$strength',
-                                TextStyle(
-                                    color: color, fontWeight: FontWeight.bold),
-                              );
-                            } else {
-                              return LineTooltipItem(
-                                '📍 No nearby level',
-                                TextStyle(
-                                    color: Colors.grey,
-                                    fontWeight: FontWeight.normal),
-                              );
-                            }
-                          }).toList();
-                        },
-                      ),
-                    ),
+  Widget _buildTimeframeSelector() {
+    final timeframes = ['1D', '1W', '1M', '5mins'];
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        children: timeframes.map((tf) {
+          final isSelected = tf == selectedTimeframe;
+          return Expanded(
+            child: GestureDetector(
+              onTap: () {
+                setState(() => selectedTimeframe = tf);
+                _loadCandles();
+              },
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                decoration: BoxDecoration(
+                  color:
+                      isSelected ? AppTheme.primaryColor : Colors.transparent,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: isSelected
+                        ? AppTheme.primaryColor
+                        : AppTheme.textSecondary,
+                  ),
+                ),
+                child: Text(
+                  tf,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: isSelected ? Colors.white : AppTheme.textSecondary,
+                    fontWeight:
+                        isSelected ? FontWeight.bold : FontWeight.normal,
                   ),
                 ),
               ),
-              const SizedBox(height: 12),
-              Row(
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  Widget _buildTrendIndicator() {
+    String trend = getTrendLabel();
+    Color trendColor = getTrendColor();
+    IconData trendIcon = trend == 'Bullish'
+        ? Icons.trending_up
+        : trend == 'Bearish'
+            ? Icons.trending_down
+            : Icons.trending_flat;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [trendColor.withOpacity(0.2), Colors.transparent],
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+        ),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: trendColor.withOpacity(0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(trendIcon, color: trendColor, size: 16),
+          const SizedBox(width: 6),
+          Text(
+            'Market Trend: $trend',
+            style: TextStyle(
+                color: trendColor, fontWeight: FontWeight.w600, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChart() {
+    if (candles.isEmpty) {
+      return const Center(child: Text('No data available'));
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceColor,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: InteractiveChart(
+          candles: candles
+              .map((candle) => CandleData(
+                    timestamp:
+                        DateTime.parse(candle.date).millisecondsSinceEpoch,
+                    open: candle.open,
+                    high: candle.high,
+                    low: candle.low,
+                    close: candle.close,
+                    volume: candle.volume.toDouble(),
+                  ))
+              .toList(),
+          overlayInfo: (candleData) {
+            // Find patterns for this timestamp
+            final patterns = patternMarkers[candleData.timestamp];
+            return {
+              'Date': DateTime.fromMillisecondsSinceEpoch(candleData.timestamp)
+                  .toLocal()
+                  .toString()
+                  .split(' ')[0],
+              'Open': '₹${candleData.open?.toStringAsFixed(2)}',
+              'High': '₹${candleData.high?.toStringAsFixed(2)}',
+              'Low': '₹${candleData.low?.toStringAsFixed(2)}',
+              'Close': '₹${candleData.close?.toStringAsFixed(2)}',
+              if (patterns != null && patterns.isNotEmpty)
+                'Patterns': patterns.join(', '),
+            };
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPatternsSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                '📊 Detected Patterns',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+              ),
+              TextButton(
+                onPressed: () => _showAllPatterns(),
+                child: const Text('View All', style: TextStyle(fontSize: 12)),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          height: 120,
+          child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            itemCount: patternMarkers.values.expand((i) => i).take(5).length,
+            itemBuilder: (context, index) {
+              final patterns = patternMarkers.values.expand((i) => i).toList();
+              if (index >= patterns.length) return const SizedBox.shrink();
+              final pattern = patterns[index];
+              return _buildPatternCard(pattern);
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPatternCard(String pattern) {
+    bool isBullish = pattern.toLowerCase().contains('bull') ||
+        pattern.toLowerCase().contains('up') ||
+        pattern.toLowerCase().contains('rise');
+    bool isBearish = pattern.toLowerCase().contains('bear') ||
+        pattern.toLowerCase().contains('down') ||
+        pattern.toLowerCase().contains('fall');
+
+    Color patternColor = isBullish
+        ? AppTheme.accentGreen
+        : isBearish
+            ? AppTheme.accentRed
+            : AppTheme.accentYellow;
+    IconData patternIcon = isBullish
+        ? Icons.trending_up
+        : isBearish
+            ? Icons.trending_down
+            : Icons.remove_circle_outline;
+
+    return AnimationConfiguration.staggeredList(
+      position: 0,
+      duration: const Duration(milliseconds: 375),
+      child: SlideAnimation(
+        verticalOffset: 50.0,
+        child: FadeInAnimation(
+          child: GestureDetector(
+            onTap: () => _showPatternDetails(pattern),
+            child: Container(
+              width: 140,
+              margin: const EdgeInsets.only(right: 12),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppTheme.cardColor,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: patternColor.withOpacity(0.3)),
+                boxShadow: [
+                  BoxShadow(
+                    color: patternColor.withOpacity(0.1),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.horizontal_rule, color: Colors.blue, size: 18),
-                  Text(" Support Levels  "),
-                  Icon(Icons.horizontal_rule, color: Colors.red, size: 18),
-                  Text(" Resistance Levels"),
+                  Icon(patternIcon, color: patternColor, size: 24),
+                  const SizedBox(height: 8),
+                  Text(
+                    pattern.length > 25
+                        ? '${pattern.substring(0, 22)}...'
+                        : pattern,
+                    style: const TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w600),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: patternColor.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      isBullish
+                          ? 'BUY SIGNAL'
+                          : (isBearish ? 'SELL SIGNAL' : 'NEUTRAL'),
+                      style: TextStyle(
+                        color: patternColor,
+                        fontSize: 8,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
                 ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLoadingShimmer() {
+    return SingleChildScrollView(
+      child: Column(
+        children: [
+          Container(
+            height: 50,
+            margin: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8),
+            ),
+          ),
+          SizedBox(
+            height: MediaQuery.of(context).size.height * 0.5,
+            child: Container(
+              margin: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+          ),
+          Container(
+            height: 120,
+            margin: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+          const SizedBox(height: 80),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBottomNavigation() {
+    return BottomNavigationBar(
+      currentIndex: _currentIndex,
+      onTap: (index) {
+        setState(() {
+          _currentIndex = index;
+        });
+      },
+      type: BottomNavigationBarType.fixed,
+      backgroundColor: AppTheme.surfaceColor,
+      selectedItemColor: AppTheme.primaryColor,
+      unselectedItemColor: AppTheme.textSecondary,
+      items: const [
+        BottomNavigationBarItem(
+          icon: Icon(Icons.show_chart),
+          label: 'Charts',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.book),
+          label: 'Patterns',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.star),
+          label: 'Watchlist',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.settings),
+          label: 'Settings',
+        ),
+      ],
+    );
+  }
+
+  Widget? _buildFAB() {
+    if (patternMarkers.isEmpty) return null;
+
+    return FloatingActionButton.extended(
+      onPressed: () => _showPatternHistory(),
+      icon: const Icon(Icons.history, color: Colors.white),
+      label:
+          const Text('Pattern History', style: TextStyle(color: Colors.white)),
+      backgroundColor: AppTheme.primaryColor,
+    );
+  }
+
+  void _showSymbolSearch() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppTheme.backgroundColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return Container(
+          height: MediaQuery.of(context).size.height * 0.7,
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              const Text('Search Symbols',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 16),
+              TextField(
+                autofocus: true,
+                decoration: InputDecoration(
+                  hintText: 'Enter symbol name...',
+                  prefixIcon: const Icon(Icons.search),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                onChanged: (query) {},
+              ),
+              const SizedBox(height: 16),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: symbols.length,
+                  itemBuilder: (context, index) {
+                    return ListTile(
+                      leading: const Icon(Icons.show_chart),
+                      title: Text(symbols[index].replaceAll('.BSE', '')),
+                      onTap: () {
+                        setState(() {
+                          selectedSymbol = symbols[index];
+                          _loadCandles();
+                        });
+                        Navigator.pop(context);
+                      },
+                    );
+                  },
+                ),
               ),
             ],
           ),
@@ -297,511 +1009,124 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Set<String> getAllDetectedPatterns() {
-    final patternSet = <String>{};
-    patternMarkers.values.forEach((list) => patternSet.addAll(list));
-    return patternSet;
-  }
+  void _showPatternDetails(String pattern) async {
+    final info = await ApiService.fetchPatternInfo(pattern);
 
-  List<String> getFilterOptions() {
-    final allPatterns = getAllDetectedPatterns().toList()..sort();
-    return ['All', ...allPatterns];
-  }
-
-  bool patternMatchesFilter(String pattern) {
-    final lower = pattern.toLowerCase();
-    if (selectedFilter == 'All') return true;
-    if (selectedFilter == 'Bullish') return lower.contains('bull');
-    if (selectedFilter == 'Bearish') return lower.contains('bear');
-    return pattern == selectedFilter;
-  }
-
-  void showPatternDetails(String patternName) async {
-    final info = await ApiService.fetchPatternInfo(patternName);
-
-    if (info == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("No detailed info found for $patternName")),
+    if (info != null && mounted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => PatternDetailScreen(patternInfo: info),
+        ),
       );
-      return;
     }
+  }
 
+  void _showPatternHistory() {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      backgroundColor: AppTheme.backgroundColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (context) => Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(info.title,
-                  style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.indigo)),
-              const SizedBox(height: 10),
-              Text("📘 Type: ${info.type}",
-                  style: TextStyle(
-                      fontWeight: FontWeight.w500, color: Colors.black87)),
-              const SizedBox(height: 10),
-              if (info.image.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  child: Image.memory(
-                    base64Decode(info.image.split(',').last),
-                    height: 150,
-                    fit: BoxFit.contain,
-                  ),
-                ),
-              const SizedBox(height: 10),
-              Text(info.description,
-                  style: TextStyle(color: Colors.black87),
-                  textAlign: TextAlign.justify),
-              const SizedBox(height: 10),
-              Text("💡 Trade Tip:",
-                  style: TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 4),
-              Text(info.tradeTip, textAlign: TextAlign.justify),
-              const SizedBox(height: 20),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  void showPatternHistorySheet(BuildContext context) {
-    final sortedTimestamps = patternMarkers.keys.toList()..sort();
-    final List<Widget> historyWidgets = [];
-
-    for (var ts in sortedTimestamps) {
-      final patterns = patternMarkers[ts]!;
-      final date = DateTime.fromMillisecondsSinceEpoch(ts)
-          .toLocal()
-          .toString()
-          .split(' ')
-          .first;
-
-      for (var pattern in patterns.where(patternMatchesFilter)) {
-        Color color;
-        IconData icon;
-
-        if (pattern.toLowerCase().contains("bull")) {
-          color = Colors.green;
-          icon = Icons.trending_up;
-        } else if (pattern.toLowerCase().contains("bear")) {
-          color = Colors.red;
-          icon = Icons.trending_down;
-        } else {
-          color = Colors.orange;
-          icon = Icons.remove_circle_outline;
-        }
-
-        historyWidgets.add(
-          ListTile(
-            leading: Icon(icon, color: color),
-            title: Text(pattern),
-            subtitle: Text("📅 $date"),
-            onTap: () => showPatternDetails(pattern),
-          ),
-        );
-      }
-    }
-
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.white,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (_) => Container(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              "📘 Pattern History",
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 12),
-            Expanded(
-              child: historyWidgets.isEmpty
-                  ? Center(child: Text("No patterns detected yet."))
-                  : ListView(children: historyWidgets),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  List<Widget> getPatternSummaryChips() {
-    final List<int> sortedTimestamps = patternMarkers.keys.toList()
-      ..sort((a, b) => a.compareTo(b)); // sort from oldest to newest
-
-    final LinkedHashSet<String> orderedPatterns = LinkedHashSet();
-    for (final ts in sortedTimestamps) {
-      for (final pattern in patternMarkers[ts]!) {
-        if (patternMatchesFilter(pattern)) {
-          orderedPatterns.add(pattern);
-        }
-      }
-    }
-
-    return orderedPatterns.map((pattern) {
-      Color chipColor;
-      IconData chipIcon;
-
-      if (pattern.toLowerCase().contains("bull")) {
-        chipColor = Colors.green;
-        chipIcon = Icons.trending_up;
-      } else if (pattern.toLowerCase().contains("bear")) {
-        chipColor = Colors.red;
-        chipIcon = Icons.trending_down;
-      } else {
-        chipColor = Colors.orange;
-        chipIcon = Icons.remove_circle_outline;
-      }
-
-      return Padding(
-        padding: const EdgeInsets.only(right: 8),
-        child: GestureDetector(
-          onTap: () => showPatternDetails(pattern),
-          child: Chip(
-            label: Text(pattern),
-            avatar: Icon(chipIcon, size: 18, color: Colors.white),
-            backgroundColor: chipColor,
-            labelStyle: TextStyle(color: Colors.white),
-          ),
-        ),
-      );
-    }).toList();
-  }
-
-  String getTrendLabel(List<CandleData> candles) {
-    if (candles.length < 6) return '🔄 Not enough data';
-
-    double avg(List<double> values) =>
-        values.reduce((a, b) => a + b) / values.length;
-
-    final last3 =
-        candles.sublist(candles.length - 3).map((e) => e.close!).toList();
-    final prev3 = candles
-        .sublist(candles.length - 6, candles.length - 3)
-        .map((e) => e.close!)
-        .toList();
-
-    final lastAvg = avg(last3);
-    final prevAvg = avg(prev3);
-
-    if (lastAvg > prevAvg * 1.01) return '📈 Uptrend';
-    if (lastAvg < prevAvg * 0.99) return '📉 Downtrend';
-    return '🔄 Sideways';
-  }
-
-  Future<void> loadSymbols() async {
-    final fetchedSymbols = await ApiService.fetchSymbols();
-    if (fetchedSymbols.isNotEmpty) {
-      setState(() {
-        // Avoid duplicates
-        symbols = [
-          ...symbols,
-          ...fetchedSymbols.where((s) => !symbols.contains(s)),
-        ];
-        selectedSymbol ??= symbols.first;
-      });
-      await loadCandles();
-    }
-  }
-
-  Future<void> loadCandles() async {
-    if (selectedSymbol == null) return;
-
-    setState(() => isLoading = true);
-    print("📡 Selected: $selectedSymbol | Timeframe: $selectedTimeframe");
-
-    final stored = await ApiService.fetchAndStoreCandles(
-      selectedSymbol!,
-      selectedTimeframe,
-    );
-
-    if (!stored) {
-      print("❌ Alpha fetch failed");
-      setState(() => isLoading = false);
-      return;
-    }
-
-    final url = Uri.parse(
-      "${ApiService.baseUrl}/trading_app/fetch_patterns.php?symbol=$selectedSymbol&timeframe=$selectedTimeframe",
-    );
-    final res = await http.get(url);
-    final data = jsonDecode(res.body);
-
-    if (data["status"] == "success") {
-      final List candlesJson = data["candles"];
-      final List patternsJson = data["patterns"];
-
-      List<CandleData> tempCandles = [];
-      patternMarkers.clear();
-
-      for (var item in candlesJson) {
-        final dt = DateTime.parse(item['date']);
-        tempCandles.add(CandleData(
-          timestamp: dt.millisecondsSinceEpoch,
-          open: item['open'].toDouble(),
-          high: item['high'].toDouble(),
-          low: item['low'].toDouble(),
-          close: item['close'].toDouble(),
-          volume: item['volume'].toDouble(),
-        ));
-      }
-
-      for (var p in patternsJson) {
-        final dt = DateTime.parse(p['date']);
-        final timestamp = dt.millisecondsSinceEpoch;
-        final pattern = p['pattern'];
-
-        if (!patternMarkers.containsKey(timestamp)) {
-          patternMarkers[timestamp] = [];
-        }
-        patternMarkers[timestamp]!.add(pattern);
-      }
-
-      setState(() {
-        chartCandles = tempCandles;
-        isLoading = false;
-      });
-
-      print(
-          "✅ Loaded ${chartCandles.length} candles with ${patternMarkers.length} markers");
-    } else {
-      print("❌ Pattern API failed");
-      setState(() => isLoading = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text('Trade Mentor'),
-        actions: [
-          IconButton(
-            icon: Icon(Icons.show_chart_rounded),
-            tooltip: "Support/Resistance",
-            onPressed: () => showSupportResistanceChart(context),
-          ),
-        ],
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          children: [
-            // 🔽 Dropdowns
-            Row(
-              children: [
-                Expanded(
-                  child: DropdownButton<String>(
-                    isExpanded: true,
-                    value: selectedSymbol,
-                    hint: Text("Select Symbol"),
-                    items: symbols
-                        .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-                        .toList(),
-                    onChanged: (val) {
-                      setState(() => selectedSymbol = val);
-                      loadCandles();
-                    },
-                  ),
-                ),
-                SizedBox(width: 10),
-                DropdownButton<String>(
-                  value: selectedTimeframe,
-                  items: ['1D', '1W', '1M', '5min']
-                      .map((tf) => DropdownMenuItem(value: tf, child: Text(tf)))
-                      .toList(),
-                  onChanged: (val) {
-                    setState(() => selectedTimeframe = val!);
-                    loadCandles();
-                  },
-                ),
-              ],
-            ),
-            Row(
-              children: [
-                Text("🧮 Filter: "),
-                DropdownButton<String>(
-                  value: selectedFilter,
-                  items: getFilterOptions()
-                      .map((type) =>
-                          DropdownMenuItem(value: type, child: Text(type)))
-                      .toList(),
-                  onChanged: (val) {
-                    setState(() => selectedFilter = val!);
-                  },
-                ),
-              ],
-            ),
-            SizedBox(height: 8),
-
-            // 🟡 Pattern Summary Chips
-            if (patternMarkers.isNotEmpty)
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+      builder: (context) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.5,
+          minChildSize: 0.3,
+          maxChildSize: 0.9,
+          expand: false,
+          builder: (context, scrollController) {
+            return Container(
+              padding: const EdgeInsets.all(16),
+              child: Column(
                 children: [
-                  Text(
-                    '📌 Patterns Detected In Chart',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: AppTheme.textSecondary,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
                     ),
                   ),
-                  SizedBox(height: 6),
-                  Container(
-                    alignment: Alignment.centerLeft,
-                    width: double.infinity, // ✅ Take full width of the screen
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: getPatternSummaryChips(),
-                      ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Pattern History',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 16),
+                  Expanded(
+                    child: ListView.builder(
+                      controller: scrollController,
+                      itemCount: patternMarkers.length,
+                      itemBuilder: (context, index) {
+                        final timestamp = patternMarkers.keys.toList()[index];
+                        final patterns = patternMarkers[timestamp]!;
+                        final date =
+                            DateTime.fromMillisecondsSinceEpoch(timestamp);
+
+                        return Card(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          child: ExpansionTile(
+                            leading: Icon(
+                              Icons.calendar_today,
+                              color: AppTheme.primaryColor,
+                            ),
+                            title: Text(
+                              DateFormat('MMM dd, yyyy').format(date),
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            children: patterns.map((pattern) {
+                              return ListTile(
+                                leading: Icon(
+                                  pattern.toLowerCase().contains('bull')
+                                      ? Icons.trending_up
+                                      : pattern.toLowerCase().contains('bear')
+                                          ? Icons.trending_down
+                                          : Icons.remove,
+                                  color: pattern.toLowerCase().contains('bull')
+                                      ? AppTheme.accentGreen
+                                      : pattern.toLowerCase().contains('bear')
+                                          ? AppTheme.accentRed
+                                          : AppTheme.accentYellow,
+                                ),
+                                title: Text(pattern),
+                                onTap: () {
+                                  Navigator.pop(context);
+                                  _showPatternDetails(pattern);
+                                },
+                              );
+                            }).toList(),
+                          ),
+                        );
+                      },
                     ),
                   ),
                 ],
               ),
-
-            SizedBox(height: 10),
-
-            // 📊 Chart Section
-            Expanded(
-              child: isLoading
-                  ? Center(child: CircularProgressIndicator())
-                  : chartCandles.isEmpty
-                      ? Center(child: Text("No data available"))
-                      : LayoutBuilder(
-                          builder: (context, constraints) {
-                            final trend = getTrendLabel(chartCandles);
-                            final trendColor = trend.contains('Up')
-                                ? Colors.green
-                                : trend.contains('Down')
-                                    ? Colors.red
-                                    : Colors.orange;
-
-                            return Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                // 📈 Smart Trend Badge
-                                Container(
-                                  margin: const EdgeInsets.only(bottom: 10),
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 14, vertical: 8),
-                                  decoration: BoxDecoration(
-                                    color: trendColor,
-                                    borderRadius: BorderRadius.circular(20),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: trendColor.withOpacity(0.3),
-                                        blurRadius: 6,
-                                        offset: Offset(0, 3),
-                                      ),
-                                    ],
-                                  ),
-                                  child: Text(
-                                    trend,
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.bold,
-                                      letterSpacing: 0.5,
-                                    ),
-                                  ),
-                                ),
-
-                                SizedBox(height: 10),
-
-                                // Chart
-                                Expanded(
-                                  child: Padding(
-                                    padding: const EdgeInsets.only(
-                                        bottom: 60), // 👈 prevent overlap
-                                    child: Stack(
-                                      children: [
-                                        InteractiveChart(
-                                          candles: chartCandles,
-                                          overlayInfo: (candle) {
-                                            final patterns = patternMarkers[
-                                                candle.timestamp];
-                                            final filtered = patterns
-                                                    ?.where(
-                                                        patternMatchesFilter)
-                                                    .toList() ??
-                                                [];
-                                            final patternText =
-                                                filtered.isNotEmpty
-                                                    ? filtered.join("\n")
-                                                    : null;
-
-                                            final open = candle.open
-                                                    ?.toStringAsFixed(2) ??
-                                                '-';
-                                            final close = candle.close
-                                                    ?.toStringAsFixed(2) ??
-                                                '-';
-                                            final high = candle.high
-                                                    ?.toStringAsFixed(2) ??
-                                                '-';
-                                            final low = candle.low
-                                                    ?.toStringAsFixed(2) ??
-                                                '-';
-
-                                            final dateStr = DateTime
-                                                    .fromMillisecondsSinceEpoch(
-                                                        candle.timestamp)
-                                                .toLocal()
-                                                .toString()
-                                                .split(' ')
-                                                .first;
-
-                                            return {
-                                              if (patternText != null)
-                                                '📌 Patterns': patternText,
-                                              '🟢 Open': open,
-                                              '🔴 Close': close,
-                                              '🔺 High': high,
-                                              '🔻 Low': low,
-                                              '📅 Date': dateStr,
-                                            };
-                                          },
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            );
-                          },
-                        ),
-            )
-          ],
-        ),
-      ),
-      floatingActionButton: patternMarkers.isNotEmpty
-          ? FloatingActionButton.extended(
-              onPressed: () => showPatternHistorySheet(context),
-              icon: Icon(Icons.history, color: Colors.white), // 👈 icon color
-              label: Text(
-                "Pattern History",
-                style: TextStyle(color: Colors.white), // 👈 text color
-              ),
-              backgroundColor: Colors.indigo, // 👈 button bg
-            )
-          : null,
-      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+            );
+          },
+        );
+      },
     );
+  }
+
+  void _showAllPatterns() {
+    _showPatternHistory();
+  }
+
+  Future<void> _refreshData() async {
+    setState(() => isRefreshing = true);
+    await _loadCandles();
+    setState(() => isRefreshing = false);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
   }
 }

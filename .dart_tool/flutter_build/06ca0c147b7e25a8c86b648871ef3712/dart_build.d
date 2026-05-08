@@ -1,0 +1,1 @@
+ C:\\flutter\\projects\\Trade-Mentor\\.dart_tool\\flutter_build\\06ca0c147b7e25a8c86b648871ef3712\\dart_build_result.json:  C:\\flutter\\projects\\Trade-Mentor\\.dart_tool\\package_config.json C:\\flutter\\projects\\Trade-Mentor\\pubspec.yaml C:\\flutter\\sdk\\flutter\\bin\\cache\\dart-sdk\\version c:\\flutter\\projects\\trade-mentor\\.dart_tool\\package_config.json

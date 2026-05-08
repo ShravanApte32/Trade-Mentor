@@ -1,0 +1,1 @@
+ C:\\flutter\\projects\\Trade-Mentor\\.dart_tool\\flutter_build\\06ca0c147b7e25a8c86b648871ef3712\\native_assets.json: 
