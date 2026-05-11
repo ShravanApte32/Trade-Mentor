@@ -47,10 +47,18 @@ class _HomeScreenState extends State<HomeScreen>
   // Mock mode for development
   bool useMockData = true;
 
+  // Zoom/Scroll state
+  List<Candle> _displayedCandles = [];
+  int? _zoomStartIndex;
+  int? _zoomEndIndex;
+  DateTime? _selectedDateForHighlight;
+  bool _isZoomed = false; // Add this variable to track zoom state
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    _displayedCandles = []; // Initialize empty
     _loadInitialData();
   }
 
@@ -58,6 +66,7 @@ class _HomeScreenState extends State<HomeScreen>
   void changeSymbol(String symbol) {
     setState(() {
       selectedSymbol = symbol;
+      _resetZoom();
       _loadCandles();
     });
   }
@@ -67,6 +76,13 @@ class _HomeScreenState extends State<HomeScreen>
     setState(() {
       _currentIndex = index;
     });
+  }
+
+  void _resetZoom() {
+    _zoomStartIndex = null;
+    _zoomEndIndex = null;
+    _selectedDateForHighlight = null;
+    _isZoomed = false;
   }
 
   Future<void> _loadInitialData() async {
@@ -105,6 +121,7 @@ class _HomeScreenState extends State<HomeScreen>
     setState(() {
       candles = MockDataGenerator.generateMockCandles(selectedSymbol!, 50);
       patternMarkers = MockDataGenerator.generateMockPatterns(candles);
+      _updateDisplayedCandles();
       _updateMarketMetrics();
     });
   }
@@ -113,6 +130,10 @@ class _HomeScreenState extends State<HomeScreen>
     if (selectedSymbol == null) return;
 
     setState(() => isLoading = true);
+
+    // Reset zoom state before loading new data
+    _resetZoomView();
+
     print("📡 Loading candles for: $selectedSymbol | $selectedTimeframe");
 
     try {
@@ -186,6 +207,7 @@ class _HomeScreenState extends State<HomeScreen>
           setState(() {
             candles = tempCandles;
             patternMarkers = tempMarkers;
+            _updateDisplayedCandles();
             _updateMarketMetrics();
           });
 
@@ -244,6 +266,231 @@ class _HomeScreenState extends State<HomeScreen>
     return AppTheme.accentYellow;
   }
 
+  void _updateDisplayedCandles() {
+    print("🔄 Updating displayed candles...");
+    print("Zoom start: $_zoomStartIndex, Zoom end: $_zoomEndIndex");
+    print("Total candles: ${candles.length}");
+
+    if (_zoomStartIndex != null &&
+        _zoomEndIndex != null &&
+        _zoomStartIndex! >= 0 &&
+        _zoomEndIndex! < candles.length &&
+        _zoomStartIndex! <= _zoomEndIndex!) {
+      // Ensure the indices are within bounds
+      final start = _zoomStartIndex!.clamp(0, candles.length - 1);
+      final end = _zoomEndIndex!.clamp(start, candles.length - 1);
+
+      _displayedCandles = candles.sublist(start, end + 1);
+      print(
+          "✅ Zoomed view: ${_displayedCandles.length} candles (${start} to ${end})");
+      _isZoomed = true;
+    } else {
+      _displayedCandles = List.from(candles); // Create a new list instance
+      print("✅ Full view: ${_displayedCandles.length} candles");
+      _isZoomed = false;
+    }
+
+    // Verify the update
+    if (_displayedCandles.isEmpty && candles.isNotEmpty) {
+      print(
+          "⚠️ Warning: Displayed candles is empty but total candles is ${candles.length}");
+      _displayedCandles = List.from(candles);
+      _isZoomed = false;
+    }
+  }
+
+  Future<void> _scrollToDate(DateTime targetDate) async {
+    if (candles.isEmpty) {
+      print("❌ No candles available");
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No chart data available'),
+          duration: Duration(seconds: 2),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    print(
+        "🔍 Looking for date: ${DateFormat('yyyy-MM-dd').format(targetDate)}");
+    print(
+        "📊 Available candle dates: ${candles.map((c) => c.date).take(5).toList()}...");
+
+    // Find the index of the candle with matching date
+    int targetIndex = -1;
+    final targetDateStr = DateFormat('yyyy-MM-dd').format(targetDate);
+
+    for (int i = 0; i < candles.length; i++) {
+      String candleDateStr = candles[i].date;
+      DateTime? candleDate;
+
+      // Try different date formats
+      try {
+        candleDate = DateTime.parse(candleDateStr);
+      } catch (e) {
+        try {
+          List<String> parts = candleDateStr.split('/');
+          if (parts.length == 3) {
+            candleDate = DateTime(
+                int.parse(parts[2]), int.parse(parts[1]), int.parse(parts[0]));
+          }
+        } catch (e2) {
+          print("⚠️ Could not parse date: $candleDateStr");
+          continue;
+        }
+      }
+
+      if (candleDate != null) {
+        final candleDateStrFormatted =
+            DateFormat('yyyy-MM-dd').format(candleDate);
+        if (candleDateStrFormatted == targetDateStr) {
+          targetIndex = i;
+          print("✅ Found match at index $targetIndex");
+          break;
+        }
+      }
+    }
+
+    if (targetIndex != -1) {
+      // Calculate zoom range
+      int startIndex = (targetIndex - 10).clamp(0, candles.length - 1);
+      int endIndex = (targetIndex + 10).clamp(0, candles.length - 1);
+
+      if (endIndex - startIndex < 5) {
+        startIndex = (targetIndex - 5).clamp(0, candles.length - 1);
+        endIndex = (targetIndex + 5).clamp(0, candles.length - 1);
+      }
+
+      print("📍 Zooming to range: $startIndex to $endIndex");
+
+      setState(() {
+        _zoomStartIndex = startIndex;
+        _zoomEndIndex = endIndex;
+        _selectedDateForHighlight = targetDate;
+        _updateDisplayedCandles();
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+              '📍 Showing ${DateFormat('MMM dd, yyyy').format(targetDate)}'),
+          duration: const Duration(seconds: 2),
+          backgroundColor: AppTheme.accentGreen,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+
+      Future.delayed(const Duration(seconds: 3), () {
+        if (mounted) {
+          setState(() {
+            _selectedDateForHighlight = null;
+          });
+        }
+      });
+    } else {
+      // Date not found - show error
+      _showDateNotFoundError(targetDate);
+    }
+  }
+
+  void _showDateNotFoundError(DateTime targetDate) {
+    // Find the closest date
+    int closestIndex = 0;
+    int smallestDiff = double.maxFinite.toInt();
+    final targetMillis = targetDate.millisecondsSinceEpoch;
+
+    for (int i = 0; i < candles.length; i++) {
+      try {
+        DateTime candleDate = DateTime.parse(candles[i].date);
+        int diff = (candleDate.millisecondsSinceEpoch - targetMillis).abs();
+        if (diff < smallestDiff) {
+          smallestDiff = diff;
+          closestIndex = i;
+        }
+      } catch (e) {
+        continue;
+      }
+    }
+
+    String closestDateStr = "unknown";
+    DateTime? closestDate;
+    try {
+      closestDate = DateTime.parse(candles[closestIndex].date);
+      closestDateStr = DateFormat('MMM dd, yyyy').format(closestDate);
+    } catch (e) {}
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('⚠️ Date not found. Closest: $closestDateStr'),
+        duration: const Duration(seconds: 3),
+        backgroundColor: Colors.orange,
+        behavior: SnackBarBehavior.floating,
+        action: SnackBarAction(
+          label: 'Show Closest',
+          textColor: Colors.white,
+          onPressed: () {
+            if (closestDate != null) {
+              _scrollToDate(closestDate);
+            }
+          },
+        ),
+      ),
+    );
+  }
+
+  void _debugDateFormats() {
+    print("=== Date Format Debug ===");
+    print("Candles count: ${candles.length}");
+    if (candles.isNotEmpty) {
+      print("First candle date: ${candles[0].date}");
+      print("Last candle date: ${candles[candles.length - 1].date}");
+    }
+
+    print("Pattern marker dates:");
+    patternMarkers.keys.take(5).forEach((timestamp) {
+      final date = DateTime.fromMillisecondsSinceEpoch(timestamp);
+      print(
+          "  Pattern date: ${DateFormat('yyyy-MM-dd').format(date)} (timestamp: $timestamp)");
+    });
+    print("========================");
+  }
+
+  // Method to reset zoom and show full chart
+  void _resetZoomView() {
+    print("🔄 Resetting zoom view...");
+    print(
+        "Before reset - zoomStart: $_zoomStartIndex, zoomEnd: $_zoomEndIndex");
+
+    setState(() {
+      // Clear all zoom-related variables
+      _zoomStartIndex = null;
+      _zoomEndIndex = null;
+      _selectedDateForHighlight = null;
+      _isZoomed = false;
+
+      // Reset displayed candles to full list
+      _displayedCandles =
+          List.from(candles); // Create a new list to ensure refresh
+    });
+
+    print(
+        "After reset - displayed candles: ${_displayedCandles.length} (total: ${candles.length})");
+
+    // Force a rebuild of the chart
+    if (mounted) {
+      // Show confirmation message
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('✓ Reset to full chart view'),
+          duration: Duration(seconds: 1),
+          backgroundColor: AppTheme.accentGreen,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -251,16 +498,44 @@ class _HomeScreenState extends State<HomeScreen>
       appBar: _buildAppBar(),
       body: isLoading
           ? _buildLoadingShimmer()
-          : IndexedStack(
-              index: _currentIndex,
+          : Column(
               children: [
-                _buildMainContent(),
-                const PatternsLibraryScreen(),
-                WatchlistScreen(onSymbolSelected: (symbol) {
-                  changeSymbol(symbol);
-                  changeTab(0);
-                }),
-                const SettingsScreen(),
+                // Improved reset button - shows when zoomed
+                if (_isZoomed ||
+                    (_zoomStartIndex != null && _zoomEndIndex != null) ||
+                    (_displayedCandles.length != candles.length &&
+                        candles.isNotEmpty))
+                  Container(
+                    margin: const EdgeInsets.all(8),
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        _resetZoomView();
+                      },
+                      icon: const Icon(Icons.zoom_out, size: 16),
+                      label: const Text('Reset to Full Chart'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.primaryColor,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 8),
+                        textStyle: const TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ),
+                Expanded(
+                  child: IndexedStack(
+                    index: _currentIndex,
+                    children: [
+                      _buildMainContent(),
+                      const PatternsLibraryScreen(),
+                      WatchlistScreen(onSymbolSelected: (symbol) {
+                        changeSymbol(symbol);
+                        changeTab(0);
+                      }),
+                      const SettingsScreen(),
+                    ],
+                  ),
+                ),
               ],
             ),
       bottomNavigationBar: _buildBottomNavigation(),
@@ -354,7 +629,7 @@ class _HomeScreenState extends State<HomeScreen>
       height: 40,
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       child: ListView.builder(
-        key: _patternIndicatorKey, // Add this key
+        key: _patternIndicatorKey,
         scrollDirection: Axis.horizontal,
         itemCount: patternMarkers.length,
         itemBuilder: (context, index) {
@@ -448,6 +723,9 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _showPatternAtDate(DateTime date, List<String> patterns) {
+    // Ensure we have a valid date
+    final normalizedDate = DateTime(date.year, date.month, date.day);
+
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
@@ -474,20 +752,21 @@ class _HomeScreenState extends State<HomeScreen>
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  '📊 Patterns on ${DateFormat('MMM dd, yyyy').format(date)}',
+                  '📊 Patterns on ${DateFormat('MMM dd, yyyy').format(normalizedDate)}',
                   style: const TextStyle(
                       fontSize: 18, fontWeight: FontWeight.bold),
                 ),
-                // Add "Go to Chart" button
-                TextButton.icon(
-                  onPressed: () {
+                ElevatedButton.icon(
+                  onPressed: () async {
                     Navigator.pop(context); // Close bottom sheet
-                    _scrollToDate(date); // Scroll to the date
+                    // Add a small delay to ensure bottom sheet is closed
+                    await Future.delayed(const Duration(milliseconds: 100));
+                    await _scrollToDate(normalizedDate);
                   },
-                  icon: const Icon(Icons.timeline, size: 16),
-                  label: const Text('Go to Chart'),
-                  style: TextButton.styleFrom(
-                    foregroundColor: AppTheme.primaryColor,
+                  icon: const Icon(Icons.timeline, size: 18),
+                  label: const Text('Go to Chart & Zoom'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.primaryColor,
                   ),
                 ),
               ],
@@ -520,108 +799,8 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-// Add this method to scroll to a specific date
-  void _scrollToDate(DateTime targetDate) {
-    if (candles.isEmpty) return;
-
-    // Find the index of the candle
-    int targetIndex = -1;
-    for (int i = 0; i < candles.length; i++) {
-      final candleDate = DateTime.parse(candles[i].date);
-      if (candleDate.year == targetDate.year &&
-          candleDate.month == targetDate.month &&
-          candleDate.day == targetDate.day) {
-        targetIndex = i;
-        break;
-      }
-    }
-
-    if (targetIndex != -1) {
-      // Show a snackbar
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-              '📍 Showing patterns for ${DateFormat('MMM dd, yyyy').format(targetDate)}'),
-          duration: const Duration(seconds: 2),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-
-      // Highlight the pattern chip
-      setState(() {
-        _selectedDateForHighlight = targetDate;
-      });
-
-      // Scroll to the pattern in the list
-      _scrollToPatternInList(targetDate);
-
-      // Auto-deselect after 3 seconds
-      Future.delayed(const Duration(seconds: 3), () {
-        if (mounted) {
-          setState(() {
-            _selectedDateForHighlight = null;
-          });
-        }
-      });
-    }
-  }
-
-// Add a GlobalKey for the pattern indicator ListView
+  // GlobalKey for the pattern indicator ListView
   final GlobalKey _patternIndicatorKey = GlobalKey();
-
-// Add this variable to track selected date for highlighting
-  DateTime? _selectedDateForHighlight;
-
-// Add this method to scroll to the pattern in the horizontal list
-  void _scrollToPatternInList(DateTime targetDate) {
-    // Find the scrollable pattern indicator and scroll to it
-    final patternKeys = patternMarkers.keys.toList();
-    int targetIndex = -1;
-
-    for (int i = 0; i < patternKeys.length; i++) {
-      final date = DateTime.fromMillisecondsSinceEpoch(patternKeys[i]);
-      if (date.year == targetDate.year &&
-          date.month == targetDate.month &&
-          date.day == targetDate.day) {
-        targetIndex = i;
-        break;
-      }
-    }
-
-    if (targetIndex != -1 && _patternIndicatorKey.currentContext != null) {
-      // Scroll to the pattern in the horizontal list
-      final RenderBox? renderBox =
-          _patternIndicatorKey.currentContext?.findRenderObject() as RenderBox?;
-      if (renderBox != null) {
-        // The scrolling will be handled by the Scrollable widget
-        // We need to get the Scrollable state
-        final ScrollableState? scrollableState = _patternIndicatorKey
-            .currentContext
-            ?.findAncestorStateOfType<ScrollableState>();
-        if (scrollableState != null) {
-          // Calculate scroll offset (each item is about 100-120 pixels wide)
-          final double itemWidth =
-              100; // Approximate width of each pattern chip
-          final double scrollOffset = targetIndex * itemWidth;
-
-          scrollableState.position.animateTo(
-            scrollOffset,
-            duration: const Duration(milliseconds: 500),
-            curve: Curves.easeInOut,
-          );
-        }
-      }
-    }
-
-    // Auto-deselect highlight after 3 seconds
-    Future.delayed(const Duration(seconds: 3), () {
-      if (mounted) {
-        setState(() {
-          _selectedDateForHighlight = null;
-        });
-      }
-    });
-  }
 
   Widget _buildTimeframeSelector() {
     final timeframes = ['1D', '1W', '1M', '5mins'];
@@ -633,7 +812,10 @@ class _HomeScreenState extends State<HomeScreen>
           return Expanded(
             child: GestureDetector(
               onTap: () {
-                setState(() => selectedTimeframe = tf);
+                setState(() {
+                  selectedTimeframe = tf;
+                  _resetZoom();
+                });
                 _loadCandles();
               },
               child: Container(
@@ -703,34 +885,84 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Widget _buildChart() {
-    if (candles.isEmpty) {
+    if (_displayedCandles.isEmpty) {
+      // If displayed candles is empty but we have candles, reset the view
+      if (candles.isNotEmpty) {
+        print(
+            "⚠️ Displayed candles is empty but total candles is ${candles.length}. Resetting...");
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _resetZoomView();
+        });
+        return const Center(child: CircularProgressIndicator());
+      }
       return const Center(child: Text('No data available'));
     }
+
+    print("📊 Building chart with ${_displayedCandles.length} candles");
+
+    // Prepare chart data with highlight functionality
+    final chartData = _displayedCandles.asMap().entries.map((entry) {
+      final originalIndex =
+          _zoomStartIndex != null ? _zoomStartIndex! + entry.key : entry.key;
+      final candle = entry.value;
+      final timestamp = DateTime.parse(candle.date).millisecondsSinceEpoch;
+
+      // Check if this candle should be highlighted
+      final isHighlighted = _selectedDateForHighlight != null &&
+          DateTime.parse(candle.date).year == _selectedDateForHighlight!.year &&
+          DateTime.parse(candle.date).month ==
+              _selectedDateForHighlight!.month &&
+          DateTime.parse(candle.date).day == _selectedDateForHighlight!.day;
+
+      return {
+        'timestamp': timestamp,
+        'open': candle.open,
+        'high': candle.high,
+        'low': candle.low,
+        'close': candle.close,
+        'volume': candle.volume.toDouble(),
+        'highlight': isHighlighted,
+        'originalIndex': originalIndex,
+      };
+    }).toList();
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: AppTheme.surfaceColor,
         borderRadius: BorderRadius.circular(12),
+        border: _selectedDateForHighlight != null
+            ? Border.all(color: Colors.yellow, width: 2)
+            : null,
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(12),
         child: InteractiveChart(
-          candles: candles
-              .map((candle) => CandleData(
-                    timestamp:
-                        DateTime.parse(candle.date).millisecondsSinceEpoch,
-                    open: candle.open,
-                    high: candle.high,
-                    low: candle.low,
-                    close: candle.close,
-                    volume: candle.volume.toDouble(),
+          key: ValueKey(
+              'chart_${_displayedCandles.length}_${_zoomStartIndex ?? 'full'}'),
+          candles: chartData
+              .map((data) => CandleData(
+                    timestamp: data['timestamp'] as int,
+                    open: data['open'] as double,
+                    high: data['high'] as double,
+                    low: data['low'] as double,
+                    close: data['close'] as double,
+                    volume: data['volume'] as double,
                   ))
               .toList(),
           overlayInfo: (candleData) {
-            // Find patterns for this timestamp
             final patterns = patternMarkers[candleData.timestamp];
-            return {
+            final isHighlighted = _selectedDateForHighlight != null &&
+                DateTime.fromMillisecondsSinceEpoch(candleData.timestamp)
+                        .year ==
+                    _selectedDateForHighlight!.year &&
+                DateTime.fromMillisecondsSinceEpoch(candleData.timestamp)
+                        .month ==
+                    _selectedDateForHighlight!.month &&
+                DateTime.fromMillisecondsSinceEpoch(candleData.timestamp).day ==
+                    _selectedDateForHighlight!.day;
+
+            Map<String, String> info = {
               'Date': DateTime.fromMillisecondsSinceEpoch(candleData.timestamp)
                   .toLocal()
                   .toString()
@@ -739,9 +971,17 @@ class _HomeScreenState extends State<HomeScreen>
               'High': '₹${candleData.high?.toStringAsFixed(2)}',
               'Low': '₹${candleData.low?.toStringAsFixed(2)}',
               'Close': '₹${candleData.close?.toStringAsFixed(2)}',
-              if (patterns != null && patterns.isNotEmpty)
-                'Patterns': patterns.join(', '),
             };
+
+            if (patterns != null && patterns.isNotEmpty) {
+              info['Patterns'] = patterns.join(', ');
+            }
+
+            if (isHighlighted) {
+              info['📍'] = 'Selected Date';
+            }
+
+            return info;
           },
         ),
       ),
@@ -994,6 +1234,7 @@ class _HomeScreenState extends State<HomeScreen>
                       onTap: () {
                         setState(() {
                           selectedSymbol = symbols[index];
+                          _resetZoom();
                           _loadCandles();
                         });
                         Navigator.pop(context);
@@ -1094,6 +1335,19 @@ class _HomeScreenState extends State<HomeScreen>
                                           : AppTheme.accentYellow,
                                 ),
                                 title: Text(pattern),
+                                trailing: ElevatedButton.icon(
+                                  onPressed: () {
+                                    Navigator.pop(context);
+                                    _scrollToDate(date);
+                                  },
+                                  icon: const Icon(Icons.timeline, size: 16),
+                                  label: const Text('Go to Chart'),
+                                  style: ElevatedButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 4),
+                                    textStyle: const TextStyle(fontSize: 11),
+                                  ),
+                                ),
                                 onTap: () {
                                   Navigator.pop(context);
                                   _showPatternDetails(pattern);

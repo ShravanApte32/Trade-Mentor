@@ -4,7 +4,7 @@ import 'package:trading_app/models/patterns.dart';
 import '../models/candle.dart';
 
 class ApiService {
-  static const String baseUrl = "http://172.20.75.98:3000"; // Replace
+  static const String baseUrl = "http://192.168.0.112:3000"; // Replace
 
   static Future<PatternInfo?> fetchPatternInfo(String pattern) async {
     final encodedPattern = Uri.encodeComponent(pattern);
